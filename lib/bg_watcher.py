@@ -170,8 +170,8 @@ def choose_destination(resolution: str, buckets: List[SizeBucket]) -> Path:
     return buckets[-1].folder
 
 
-def save_image(tmp_path: Path, url: str, dest_dir: Path) -> Path:
-    """Move the temp file into the destination dir using the URL filename."""
+def save_image(tmp_path: Path, url: str, dest_dir: Path, buckets: List[SizeBucket]) -> Path:
+    """Move the temp file into the destination dir using the URL filename and create symlinks in lower resolution folders."""
     # Extract filename from URL
     try:
         parsed = urlparse(url)
@@ -183,11 +183,40 @@ def save_image(tmp_path: Path, url: str, dest_dir: Path) -> Path:
     except Exception:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{ts}.png"
-
+    
     dest_path = dest_dir / filename
     # shutil.move avoids cross-device errors when /tmp lives on another filesystem
     shutil.move(str(tmp_path), dest_path)
+    
+    # Create symlinks in lower resolution folders
+    create_symlinks_to_lower_buckets(dest_path, dest_dir, buckets)
+    
     return dest_path
+
+
+def create_symlinks_to_lower_buckets(image_path: Path, current_bucket_dir: Path, buckets: List[SizeBucket]) -> None:
+    """Create symlinks to the image in all lower resolution buckets."""
+    # Find current bucket index
+    current_idx = None
+    for idx, bucket in enumerate(buckets):
+        if bucket.folder == current_bucket_dir:
+            current_idx = idx
+            break
+    
+    if current_idx is None:
+        return
+    
+    # Create symlinks in all buckets after the current one (lower resolution)
+    for bucket in buckets[current_idx + 1:]:
+        symlink_path = bucket.folder / image_path.name
+        try:
+            # Check if symlink already exists or if a file with the same name exists
+            if symlink_path.exists() or symlink_path.is_symlink():
+                symlink_path.unlink()
+            symlink_path.symlink_to(image_path)
+        except Exception:
+            # Ignore errors creating symlinks
+            pass
 
 
 def process_clipboard(url: str, allowed_domains: List[str], buckets: List[SizeBucket]) -> None:
@@ -207,13 +236,15 @@ def process_clipboard(url: str, allowed_domains: List[str], buckets: List[SizeBu
 
     resolution = get_image_resolution(tmp_path)
     dest_dir = choose_destination(resolution, buckets)
-    dest_path = save_image(tmp_path, url, dest_dir)
+    dest_path = save_image(tmp_path, url, dest_dir, buckets)
     print(
         f"Saved image {dest_path.name} to {dest_dir} (resolution: {resolution or 'unknown'})")
+    print(f"  Symlinks created in lower resolution folders for broader compatibility")
 
 
 def main() -> None:
-    config_path = Path(__file__).with_name("config.yml")
+    # Config file is in the root directory (parent of lib/)
+    config_path = Path(__file__).parent.parent / "config.yml"
     allowed_domains = load_allowed_domains(config_path)
     buckets = load_size_buckets(config_path)
     if not allowed_domains:
