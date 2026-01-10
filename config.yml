@@ -1,0 +1,16 @@
+bg_watcher:
+  root_folder: ~/Pictures/Wallpapers
+  allowed_domains:
+  - i.imgur.com
+  - wallhaven.cc
+  size_breakpoints:
+  - name: 4k
+    min_width: 3840
+    min_height: 2160
+    folder: 4K
+  - name: wide
+    min_width: 2560
+    min_height: 1080
+    folder: wide
+  - name: hd
+    folder: HD
