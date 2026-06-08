@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Optional
 from urllib.parse import urlparse
-from urllib.request import urlopen
+from urllib.request import urlopen, Request
 
 
 @dataclass
@@ -32,7 +32,7 @@ def parse_simple_config(config_path: Path) -> dict:
         return {
             "allowed_domains": bg_config.get("allowed_domains", []),
             "size_breakpoints": bg_config.get("size_breakpoints", []),
-            "root_folder": bg_config.get("root_folder", "")
+            "root_folder": bg_config.get("root_folder", ""),
         }
     except Exception:
         return {"allowed_domains": [], "size_breakpoints": [], "root_folder": ""}
@@ -46,14 +46,14 @@ def load_allowed_domains(config_path: Path) -> List[str]:
 def load_size_buckets(config_path: Path) -> List[SizeBucket]:
     cfg = parse_simple_config(config_path)
     raw_sizes = cfg.get("size_breakpoints", [])
-    
+
     # Get root folder from config or use default
     root_folder_str = cfg.get("root_folder", "").strip()
     if root_folder_str:
         root_folder = Path(root_folder_str).expanduser()
     else:
         root_folder = Path.home() / "Pictures" / "Wallpapers"
-    
+
     buckets: List[SizeBucket] = []
     for item in raw_sizes:
         try:
@@ -62,8 +62,7 @@ def load_size_buckets(config_path: Path) -> List[SizeBucket]:
             min_height = int(item.get("min_height", 0))
             folder_name = str(item.get("folder", name)).strip() or name
             folder_path = root_folder / folder_name
-            buckets.append(SizeBucket(
-                name, min_width, min_height, folder_path))
+            buckets.append(SizeBucket(name, min_width, min_height, folder_path))
         except Exception:
             continue
 
@@ -119,14 +118,16 @@ def download_image(url: str, target_dir: Path) -> Optional[Path]:
     target_dir.mkdir(parents=True, exist_ok=True)
     tmp_path = target_dir / f"tmp_{os.getpid()}_{int(time.time())}.img"
     try:
-        with urlopen(url, timeout=10) as resp:  # nosec - trusted domains filtered
+        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urlopen(req, timeout=10) as resp:  # nosec - trusted domains filtered
             content_type = resp.headers.get("Content-Type", "")
             if "image" not in content_type:
                 return None
             data = resp.read()
             tmp_path.write_bytes(data)
         return tmp_path
-    except Exception:
+    except Exception as e:
+        print(e.__str__())
         return None
 
 
@@ -170,56 +171,27 @@ def choose_destination(resolution: str, buckets: List[SizeBucket]) -> Path:
     return buckets[-1].folder
 
 
-def save_image(tmp_path: Path, url: str, dest_dir: Path, buckets: List[SizeBucket]) -> Path:
-    """Move the temp file into the destination dir using the URL filename and create symlinks in lower resolution folders."""
-    # Extract filename from URL
+def save_image(tmp_path: Path, url: str, dest_dir: Path) -> Path:
+    """Move the temp file into the destination dir using the URL filename."""
     try:
         parsed = urlparse(url)
         filename = Path(parsed.path).name
         if not filename or filename == "/":
-            # Fallback to timestamp if no valid filename
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"{ts}.png"
     except Exception:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{ts}.png"
-    
+
     dest_path = dest_dir / filename
     # shutil.move avoids cross-device errors when /tmp lives on another filesystem
     shutil.move(str(tmp_path), dest_path)
-    
-    # Create symlinks in lower resolution folders
-    create_symlinks_to_lower_buckets(dest_path, dest_dir, buckets)
-    
     return dest_path
 
 
-def create_symlinks_to_lower_buckets(image_path: Path, current_bucket_dir: Path, buckets: List[SizeBucket]) -> None:
-    """Create symlinks to the image in all lower resolution buckets."""
-    # Find current bucket index
-    current_idx = None
-    for idx, bucket in enumerate(buckets):
-        if bucket.folder == current_bucket_dir:
-            current_idx = idx
-            break
-    
-    if current_idx is None:
-        return
-    
-    # Create symlinks in all buckets after the current one (lower resolution)
-    for bucket in buckets[current_idx + 1:]:
-        symlink_path = bucket.folder / image_path.name
-        try:
-            # Check if symlink already exists or if a file with the same name exists
-            if symlink_path.exists() or symlink_path.is_symlink():
-                symlink_path.unlink()
-            symlink_path.symlink_to(image_path)
-        except Exception:
-            # Ignore errors creating symlinks
-            pass
-
-
-def process_clipboard(url: str, allowed_domains: List[str], buckets: List[SizeBucket]) -> None:
+def process_clipboard(
+    url: str, allowed_domains: List[str], buckets: List[SizeBucket]
+) -> None:
     """Process a single clipboard URL if valid and download the image."""
     if not is_url(url):
         print(f"Clipboard content ignored (not a URL): {url}")
@@ -236,10 +208,8 @@ def process_clipboard(url: str, allowed_domains: List[str], buckets: List[SizeBu
 
     resolution = get_image_resolution(tmp_path)
     dest_dir = choose_destination(resolution, buckets)
-    dest_path = save_image(tmp_path, url, dest_dir, buckets)
-    print(
-        f"Saved image {dest_path.name} to {dest_dir} (resolution: {resolution or 'unknown'})")
-    print(f"  Symlinks created in lower resolution folders for broader compatibility")
+    dest_path = save_image(tmp_path, url, dest_dir)
+    print(f"Saved image {dest_path.name} to {dest_dir} (resolution: {resolution or 'unknown'})")
 
 
 def main() -> None:
